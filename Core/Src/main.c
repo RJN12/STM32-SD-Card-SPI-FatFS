@@ -2,21 +2,24 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : DHT22 Environmental Data Logger
+  * @brief          : STM32 SD Card Test via SPI
+  ******************************************************************************
+  * @attention
+  *
+  * Simple SD card read/write test using FatFS
+  *
   ******************************************************************************
   */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "fatfs.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "dht22.h"
-#include "Sd_spi.h"
 #include <stdio.h>
 #include <string.h>
+#include <Sd_spi.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,9 +44,7 @@ SPI_HandleTypeDef hspi1;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-char uart_buf[100];
-char csv_buffer[150];
-uint32_t sample_count = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -52,131 +53,100 @@ static void MX_GPIO_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
+
+// Redirect printf to UART3
 int _write(int file, char *ptr, int len)
 {
     HAL_UART_Transmit(&huart3, (uint8_t*)ptr, len, HAL_MAX_DELAY);
     return len;
 }
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-void DHT22_DataLogger(void)
+/**
+ * @brief Simple SD Card Test
+ * Writes a file, reads it back, and lists all files
+ */
+void SD_Simple_Test(void)
 {
     printf("\r\n");
     printf("================================================\r\n");
-    printf("  STM32 DHT22 Environmental Data Logger\r\n");
-    printf("  Temperature & Humidity Monitoring System\r\n");
+    printf("       STM32 SD CARD SIMPLE TEST\r\n");
     printf("================================================\r\n\r\n");
 
     // Mount SD Card
-    printf("Step 1: Mounting SD Card...\r\n");
+    printf("Mounting SD card...\r\n");
     if (sd_mount() != 0)
     {
-        printf("ERROR: SD Card Mount Failed!\r\n");
-        printf("   Check SD card and connections.\r\n");
+        printf("\r\n❌ SD CARD TEST FAILED!\r\n");
+        printf("\r\nTroubleshooting:\r\n");
+        printf("  1. Check SD card is inserted\r\n");
+        printf("  2. Verify wiring:\r\n");
+        printf("     - CS   = PD14\r\n");
+        printf("     - SCK  = PA5\r\n");
+        printf("     - MISO = PA6\r\n");
+        printf("     - MOSI = PA7\r\n");
+        printf("  3. Format SD card as FAT32\r\n");
+        printf("  4. Try different SD card (2GB-32GB)\r\n");
         return;
     }
-    printf("✓ SD Card Mounted Successfully\r\n\r\n");
 
-    // Create CSV file with header
-    printf("Step 2: Creating CSV file...\r\n");
-    const char *filename = "env_log.csv";
-    const char *header = "Sample,Temperature(C),Humidity(%),Status,Timestamp\r\n";
+    // Write a simple test file
+    printf("\r\n--- Writing Test File ---\r\n");
+    const char *filename = "hello.txt";
+    const char *test_data = "Hello from STM32F767ZI!\r\n"
+                           "SD Card is working!\r\n"
+                           "Date: 2025-01-25\r\n";
 
-    if (sd_write_file(filename, header) != 0)
+    if (sd_write_file(filename, test_data) != 0)
     {
-        printf("Failed to create CSV file!\r\n");
+        printf("❌ Write Failed!\r\n");
         sd_unmount();
         return;
     }
-    printf("✓ File created: %s\r\n\r\n", filename);
 
-    // Log 10 samples
-    printf("Step 3: Logging 10 Environmental Samples...\r\n");
-    printf("================================================\r\n");
+    // Read it back
+    printf("\r\n--- Reading File Back ---\r\n");
+    char read_buffer[200];
+    UINT bytes_read;
 
-    DHT22_Data_t dht_data;
-
-    for (uint32_t sample = 1; sample <= 10; sample++)
+    if (sd_read_file(filename, read_buffer, sizeof(read_buffer), &bytes_read) == 0)
     {
-        printf("\r\n[Sample %02lu/10] Reading DHT22 sensor...\r\n", sample);
-
-        // Read DHT22
-        uint8_t read_ok = DHT22_Read(&dht_data);
-
-        if (read_ok && dht_data.checksum_ok)
-        {
-            // Determine status based on conditions
-            const char *status;
-            if (dht_data.temperature < 15.0f || dht_data.temperature > 30.0f)
-                status = "ALERT";
-            else if (dht_data.humidity < 30.0f || dht_data.humidity > 70.0f)
-                status = "WARNING";
-            else
-                status = "NORMAL";
-
-            // Get timestamp (using sample counter for now)
-            uint32_t timestamp = HAL_GetTick() / 1000; // Seconds since boot
-
-            // Print to UART
-            printf("  Temperature: %.1f°C\r\n", dht_data.temperature);
-            printf("  Humidity:    %.1f%%\r\n", dht_data.humidity);
-            printf("  Status:      %s\r\n", status);
-            printf("  Time:        %lu seconds\r\n", timestamp);
-
-            // Format CSV row
-            snprintf(csv_buffer, sizeof(csv_buffer),
-                     "%lu,%.1f,%.1f,%s,%lu\r\n",
-                     sample,
-                     dht_data.temperature,
-                     dht_data.humidity,
-                     status,
-                     timestamp);
-
-            // Write to SD card
-            if (sd_append_file(filename, csv_buffer) == 0)
-            {
-                printf("  ✓ Saved to SD card\r\n");
-            }
-            else
-            {
-                printf("  ✗ Failed to write to SD card\r\n");
-            }
-        }
-        else
-        {
-            printf("  ✗ DHT22 Read Failed (Checksum Error)\r\n");
-
-            // Log error to CSV
-            snprintf(csv_buffer, sizeof(csv_buffer),
-                     "%lu,ERROR,ERROR,READ_FAIL,%lu\r\n",
-                     sample,
-                     HAL_GetTick() / 1000);
-            sd_append_file(filename, csv_buffer);
-        }
-
-        // Wait 2 seconds between readings (DHT22 minimum interval)
-        HAL_Delay(2000);
+        printf("✓ Successfully read %u bytes:\r\n", bytes_read);
+        printf("---------------------------\r\n");
+        printf("%s", read_buffer);
+        printf("---------------------------\r\n");
+    }
+    else
+    {
+        printf("❌ Read Failed!\r\n");
     }
 
-    printf("\r\n================================================\r\n");
-    printf("✓ All 10 samples logged successfully!\r\n");
-    printf("================================================\r\n\r\n");
+    // Append more data
+    printf("\r\n--- Appending to File ---\r\n");
+    const char *append_data = "Appended line 1\r\n"
+                             "Appended line 2\r\n";
 
-    // List files on SD card
-    printf("Step 4: Files on SD Card:\r\n");
+    if (sd_append_file(filename, append_data) == 0)
+    {
+        printf("✓ Successfully appended data\r\n");
+    }
+
+    // List all files on SD card
+    printf("\r\n--- Listing Files ---\r\n");
     sd_list_files();
 
     // Unmount SD card
-    printf("\r\nStep 5: Unmounting SD card...\r\n");
+    printf("\r\n");
     sd_unmount();
 
     printf("\r\n");
     printf("================================================\r\n");
-    printf("       DATA LOGGING COMPLETE!                   \r\n");
-    printf("  Remove SD card and check 'env_log.csv'        \r\n");
+    printf("      ✓ SD CARD TEST COMPLETE!\r\n");
+    printf("  Remove SD card and check '%s' on PC\r\n", filename);
     printf("================================================\r\n");
 }
 
@@ -215,31 +185,25 @@ int main(void)
   MX_SPI1_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  // Pre-init DHT22 pin as OUTPUT HIGH (idle state for DHT22)
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  GPIO_InitStruct.Pin = DHT22_PIN;         // GPIO_PIN_12 on GPIOB
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;      // external pull-up handles this
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(DHT22_PORT, &GPIO_InitStruct);
 
-  HAL_GPIO_WritePin(DHT22_PORT, DHT22_PIN, GPIO_PIN_SET);  // idle HIGH
-
-  printf("DHT22 pin pre-initialized as OUTPUT HIGH\r\n");
-  HAL_Delay(100);  // just to be safe
-
-
-
+  // Startup message
   printf("\r\n\r\n");
-  printf("STM32F767ZI Environmental Data Logger\r\n");
-  printf("DHT22 Sensor + SD Card Storage\r\n");
-  HAL_Delay(1000);
+  printf("╔════════════════════════════════════════╗\r\n");
+  printf("║   STM32F767ZI - SD Card Test System   ║\r\n");
+  printf("╚════════════════════════════════════════╝\r\n");
+  printf("\r\n");
+  printf("Board: STM32 Nucleo-144 (F767ZI)\r\n");
+  printf("Interface: SPI1\r\n");
+  printf("CS Pin: PD14\r\n");
+  printf("\r\n");
 
-  // Run data logger once
-  DHT22_DataLogger();
+  HAL_Delay(500);
 
-  printf("\r\n💡 TIP: Insert SD card in PC to view env_log.csv\r\n");
-  printf("💡 TIP: Open CSV in Excel/Google Sheets for graphs\r\n");
+  // Run SD card test
+  SD_Simple_Test();
+
+  printf("\r\n💡 TIP: You can now remove the SD card\r\n");
+  printf("💡 TIP: Insert it into your PC to view files\r\n");
 
   /* USER CODE END 2 */
 
@@ -251,19 +215,10 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-      // Continuous monitoring mode (optional)
-      DHT22_Data_t dht_data;
+    // Idle - You can add continuous monitoring here if needed
+    // For example, blink an LED every second
+    HAL_Delay(1000);
 
-      if (DHT22_Read(&dht_data) && dht_data.checksum_ok)
-      {
-          snprintf(uart_buf, sizeof(uart_buf),
-                   "Temp: %.1f°C | Humidity: %.1f%%\r\n",
-                   dht_data.temperature,
-                   dht_data.humidity);
-          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buf, strlen(uart_buf), 200);
-      }
-
-      HAL_Delay(5000); // Read every 5 seconds
   }
   /* USER CODE END 3 */
 }
@@ -286,7 +241,7 @@ void SystemClock_Config(void)
   * in the RCC_OscInitTypeDef structure.
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 4;
@@ -404,28 +359,16 @@ static void MX_USART3_UART_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
+/* USER CODE BEGIN MX_GPIO_Init_1 */
+/* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : PB12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);
 
   /*Configure GPIO pin : PD14 */
   GPIO_InitStruct.Pin = GPIO_PIN_14;
@@ -434,9 +377,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
+/* USER CODE BEGIN MX_GPIO_Init_2 */
+/* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
@@ -458,7 +400,7 @@ void Error_Handler(void)
   /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef USE_FULL_ASSERT
+#ifdef  USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
